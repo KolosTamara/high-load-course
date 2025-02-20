@@ -9,6 +9,7 @@ import org.slf4j.LoggerFactory
 import ru.quipy.core.EventSourcingService
 import ru.quipy.payments.api.PaymentAggregate
 import java.net.SocketTimeoutException
+import ru.quipy.common.utils.SlidingWindowRateLimiter
 import java.time.Duration
 import java.util.*
 
@@ -25,7 +26,6 @@ class PaymentExternalSystemAdapterImpl(
         val emptyBody = RequestBody.create(null, ByteArray(0))
         val mapper = ObjectMapper().registerKotlinModule()
     }
-
     private val serviceName = properties.serviceName
     private val accountName = properties.accountName
     private val requestAverageProcessingTime = properties.averageProcessingTime
@@ -33,6 +33,8 @@ class PaymentExternalSystemAdapterImpl(
     private val parallelRequests = properties.parallelRequests
 
     private val client = OkHttpClient.Builder().build()
+
+    private val rateLimiter = SlidingWindowRateLimiter(rate = rateLimitPerSec.toLong() - 1, window = Duration.ofSeconds(1))
 
     override fun performPaymentAsync(paymentId: UUID, amount: Int, paymentStartedAt: Long, deadline: Long) {
         logger.warn("[$accountName] Submitting payment request for payment $paymentId")
@@ -50,6 +52,8 @@ class PaymentExternalSystemAdapterImpl(
             url("http://localhost:1234/external/process?serviceName=${serviceName}&accountName=${accountName}&transactionId=$transactionId&paymentId=$paymentId&amount=$amount")
             post(emptyBody)
         }.build()
+
+        rateLimiter.tickBlocking()
 
         try {
             client.newCall(request).execute().use { response ->
@@ -85,6 +89,7 @@ class PaymentExternalSystemAdapterImpl(
                     }
                 }
             }
+        } finally {
         }
     }
 
