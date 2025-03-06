@@ -56,10 +56,9 @@ class PaymentExternalSystemAdapterImpl(
             post(emptyBody)
         }.build()
 
-        rateLimiter.tickBlocking()
+        val processingTimeMillis = deadline - now()
 
-
-        if (semaphore.tryAcquire((requestAverageProcessingTime.toSeconds() * 4), TimeUnit.SECONDS)) {
+        if (semaphore.tryAcquire(processingTimeMillis, TimeUnit.MILLISECONDS)) {
             rateLimiter.tickBlocking()
             try {
                 client.newCall(request).execute().use { response ->
