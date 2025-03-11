@@ -37,7 +37,7 @@ class PaymentExternalSystemAdapterImpl(
     private val client = OkHttpClient.Builder().build()
 
     private val rateLimiter = SlidingWindowRateLimiter(rate = rateLimitPerSec.toLong(), window = Duration.ofSeconds(1))
-    private val semaphore = Semaphore(parallelRequests)
+    private val semaphore = Semaphore((parallelRequests).toInt())
 
     override fun performPaymentAsync(paymentId: UUID, amount: Int, paymentStartedAt: Long, deadline: Long) {
         logger.warn("[$accountName] Submitting payment request for payment $paymentId")
@@ -56,10 +56,15 @@ class PaymentExternalSystemAdapterImpl(
             post(emptyBody)
         }.build()
 
-        rateLimiter.tickBlocking()
+        val processingTimeMillis = deadline - now()
+        if (processingTimeMillis < 2 * requestAverageProcessingTime.toMillis()){
+            paymentESService.update(paymentId) {
+                it.logProcessing(false, now(), transactionId, "No chances to complete before the deadline")
+            }
+            return
+        }
 
-
-        if (semaphore.tryAcquire((requestAverageProcessingTime.toSeconds() * 4), TimeUnit.SECONDS)) {
+        if (semaphore.tryAcquire(processingTimeMillis, TimeUnit.SECONDS)) {
             rateLimiter.tickBlocking()
             try {
                 client.newCall(request).execute().use { response ->
