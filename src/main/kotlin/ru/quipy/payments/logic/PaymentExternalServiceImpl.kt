@@ -5,6 +5,7 @@ import com.fasterxml.jackson.module.kotlin.registerKotlinModule
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody
+import org.HdrHistogram.Histogram
 import org.slf4j.LoggerFactory
 import ru.quipy.core.EventSourcingService
 import ru.quipy.payments.api.PaymentAggregate
@@ -14,6 +15,7 @@ import java.time.Duration
 import java.util.*
 import java.util.concurrent.Semaphore
 import java.util.concurrent.TimeUnit
+import kotlin.math.max
 
 
 // Advice: always treat time as a Duration
@@ -34,8 +36,10 @@ class PaymentExternalSystemAdapterImpl(
     private val rateLimitPerSec = properties.rateLimitPerSec
     private val parallelRequests = properties.parallelRequests
 
-    private val client = OkHttpClient.Builder().build()
+    private var callTimeout = properties.averageProcessingTime.toMillis()
+    private var client = OkHttpClient.Builder().callTimeout(Duration.ofMillis(callTimeout)).build()
 
+    private val histogram = Histogram(1, requestAverageProcessingTime.toMillis() * 2 , 2)
     private val rateLimiter = SlidingWindowRateLimiter(rate = rateLimitPerSec.toLong(), window = Duration.ofSeconds(1))
     private val semaphore = Semaphore((parallelRequests))
 
@@ -65,10 +69,14 @@ class PaymentExternalSystemAdapterImpl(
         }
         var shouldRetry = true;
 
+
         while (now() < deadline && shouldRetry) {
             if (semaphore.tryAcquire(processingTimeMillis, TimeUnit.SECONDS)) {
                 rateLimiter.tickBlocking()
                 try {
+                    val requestStartTime = now()
+                    callTimeout = max(properties.averageProcessingTime.toMillis(), histogram.getValueAtPercentile(90.0))
+                    client = OkHttpClient.Builder().callTimeout(Duration.ofMillis(callTimeout)).build()
                     client.newCall(request).execute().use { response ->
                         val body = try {
                             mapper.readValue(response.body?.string(), ExternalSysResponse::class.java)
@@ -78,6 +86,9 @@ class PaymentExternalSystemAdapterImpl(
                         }
 
                         logger.warn("[$accountName] Payment processed for txId: $transactionId, payment: $paymentId, succeeded: ${body.result}, message: ${body.message}")
+
+                        histogram.recordValue(now() - requestStartTime)
+
                         // Здесь мы обновляем состояние оплаты в зависимости от результата в базе данных оплат.
                         // Это требуется сделать ВО ВСЕХ ИСХОДАХ (успешная оплата / неуспешная / ошибочная ситуация)
                         paymentESService.update(paymentId) {
