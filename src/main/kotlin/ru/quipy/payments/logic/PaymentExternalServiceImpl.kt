@@ -65,12 +65,6 @@ class PaymentExternalSystemAdapterImpl(
         }.build()
 
         val processingTimeMillis = deadline - now()
-        if (processingTimeMillis < 2 * requestAverageProcessingTime.toMillis()){
-            paymentESService.update(paymentId) {
-                it.logProcessing(false, now(), transactionId, "No chances to complete before the deadline")
-            }
-            return
-        }
         var shouldRetry = true;
 
         while (now() < deadline && shouldRetry) {
