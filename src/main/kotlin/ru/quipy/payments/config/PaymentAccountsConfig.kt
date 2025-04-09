@@ -8,6 +8,9 @@ import org.springframework.context.annotation.Configuration
 import ru.quipy.core.EventSourcingService
 import ru.quipy.payments.api.PaymentAggregate
 import ru.quipy.payments.logic.*
+import org.eclipse.jetty.http2.server.HTTP2CServerConnectionFactory
+import org.springframework.boot.web.embedded.jetty.JettyServerCustomizer
+import org.springframework.boot.web.embedded.jetty.JettyServletWebServerFactory
 import java.net.URI
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
@@ -23,7 +26,7 @@ class PaymentAccountsConfig {
         private val mapper = ObjectMapper().registerKotlinModule().registerModules(JavaTimeModule())
     }
 
-    private val allowedAccounts = setOf("acc-9")
+    private val allowedAccounts = setOf("acc-12")
 
     @Bean
     fun accountAdapters(paymentService: EventSourcingService<UUID, PaymentAggregate, PaymentAggregateState>): List<PaymentExternalSystemAdapter> {
@@ -43,5 +46,19 @@ class PaymentAccountsConfig {
                 it.accountName in allowedAccounts
             }.onEach(::println)
             .map { PaymentExternalSystemAdapterImpl(it, paymentService) }
+    }
+
+
+    @Bean // это для Jetty
+    fun jettyServerCustomizer(): JettyServletWebServerFactory {
+        val jettyServletWebServerFactory = JettyServletWebServerFactory()
+
+        val c = JettyServerCustomizer {
+            (it.connectors[0].getConnectionFactory("h2c") as HTTP2CServerConnectionFactory).maxConcurrentStreams =
+                1_000_000
+        }
+
+        jettyServletWebServerFactory.serverCustomizers.add(c)
+        return jettyServletWebServerFactory
     }
 }
